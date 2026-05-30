@@ -1,0 +1,12 @@
+{
+  "name": "@cutmate/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "uv --cache-dir ../../.uv-cache run fastapi dev app/main.py --host 127.0.0.1 --port 8000",
+    "lint": "uv --cache-dir ../../.uv-cache run ruff check .",
+    "typecheck": "uv --cache-dir ../../.uv-cache run pyright",
+    "test": "uv --cache-dir ../../.uv-cache run pytest --basetemp .pytest_tmp",
+    "build": "uv --cache-dir ../../.uv-cache run python -m compileall -q app tests"
+  }
+}

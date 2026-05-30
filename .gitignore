@@ -1,0 +1,49 @@
+# Real environment files
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.uv-cache/
+.venv/
+.tmp/
+
+# Frontend build/cache
+.next/
+out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Python cache/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# CutMate generated local artifacts
+.cutmate/
+*.db
+*.sqlite
+*.sqlite3
+
+# Video and media artifacts
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.avi
+*.wav
+*.mp3
+*.flac
+
+# Logs
+*.log
+pnpm-debug.log*
+npm-debug.log*
