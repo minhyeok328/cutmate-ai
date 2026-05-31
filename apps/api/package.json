@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "uv --cache-dir ../../.uv-cache run fastapi dev app/main.py --host 127.0.0.1 --port 8000",
+    "dev": "uv --cache-dir ../../.uv-cache run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload",
     "lint": "uv --cache-dir ../../.uv-cache run ruff check .",
     "typecheck": "uv --cache-dir ../../.uv-cache run pyright",
     "test": "uv --cache-dir ../../.uv-cache run pytest --basetemp .pytest_tmp/run -o cache_dir=.pytest_tmp/run/cache",
