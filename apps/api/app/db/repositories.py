@@ -156,6 +156,31 @@ class AnalysisResult:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class ThumbnailCandidateCreate:
+    id: str
+    image_asset_id: str
+    timestamp_ms: int
+    reason: str
+    tags: tuple[str, ...]
+    internal_score: float
+    status: str = "pending"
+
+
+@dataclass(frozen=True)
+class ThumbnailCandidate:
+    id: str
+    project_id: str
+    timestamp_ms: int
+    image_asset_id: str
+    reason: str
+    tags: tuple[str, ...]
+    status: str
+    internal_score: float
+    created_at: str
+    updated_at: str
+
+
 class VideoProjectRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
@@ -686,6 +711,187 @@ class AnalysisResultRepository:
         return _segment_from_row(row)
 
 
+class ThumbnailCandidateRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def replace_generated_candidates(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        candidates: tuple[ThumbnailCandidateCreate, ...],
+    ) -> tuple[ThumbnailCandidate, ...]:
+        timestamp = utc_now()
+        self.connection.execute(
+            """
+            DELETE FROM thumbnail_candidates
+            WHERE project_id = ? AND status != 'custom_selected'
+            """,
+            (project_id,),
+        )
+        self.connection.executemany(
+            """
+            INSERT INTO thumbnail_candidates (
+                id,
+                owner_id,
+                project_id,
+                timestamp_ms,
+                image_asset_id,
+                reason,
+                tags_json,
+                status,
+                internal_score,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    candidate.id,
+                    owner_id,
+                    project_id,
+                    candidate.timestamp_ms,
+                    candidate.image_asset_id,
+                    candidate.reason,
+                    json.dumps(list(candidate.tags), separators=(",", ":")),
+                    candidate.status,
+                    candidate.internal_score,
+                    timestamp,
+                    timestamp,
+                )
+                for candidate in candidates
+            ],
+        )
+        self.connection.commit()
+        return self.list_by_project(project_id)
+
+    def create_direct_frame(
+        self,
+        *,
+        owner_id: str,
+        project_id: str,
+        candidate: ThumbnailCandidateCreate,
+    ) -> ThumbnailCandidate:
+        timestamp = utc_now()
+        self.connection.execute(
+            """
+            INSERT INTO thumbnail_candidates (
+                id,
+                owner_id,
+                project_id,
+                timestamp_ms,
+                image_asset_id,
+                reason,
+                tags_json,
+                status,
+                internal_score,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'custom_selected', ?, ?, ?)
+            """,
+            (
+                candidate.id,
+                owner_id,
+                project_id,
+                candidate.timestamp_ms,
+                candidate.image_asset_id,
+                candidate.reason,
+                json.dumps(list(candidate.tags), separators=(",", ":")),
+                candidate.internal_score,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.connection.commit()
+        created = self.get(project_id, candidate.id)
+        if created is None:
+            raise RuntimeError("Failed to fetch direct frame thumbnail candidate.")
+        return created
+
+    def list_by_project(self, project_id: str) -> tuple[ThumbnailCandidate, ...]:
+        rows = self.connection.execute(
+            """
+            SELECT
+                id,
+                project_id,
+                timestamp_ms,
+                image_asset_id,
+                reason,
+                tags_json,
+                status,
+                internal_score,
+                created_at,
+                updated_at
+            FROM thumbnail_candidates
+            WHERE project_id = ?
+            ORDER BY
+                CASE status WHEN 'custom_selected' THEN 1 ELSE 0 END,
+                timestamp_ms,
+                created_at
+            """,
+            (project_id,),
+        ).fetchall()
+        return tuple(_thumbnail_from_row(row) for row in rows)
+
+    def get(self, project_id: str, thumbnail_id: str) -> ThumbnailCandidate | None:
+        row = self.connection.execute(
+            """
+            SELECT
+                id,
+                project_id,
+                timestamp_ms,
+                image_asset_id,
+                reason,
+                tags_json,
+                status,
+                internal_score,
+                created_at,
+                updated_at
+            FROM thumbnail_candidates
+            WHERE project_id = ? AND id = ?
+            """,
+            (project_id, thumbnail_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return _thumbnail_from_row(row)
+
+    def update_status(
+        self,
+        *,
+        project_id: str,
+        thumbnail_id: str,
+        status: str,
+    ) -> ThumbnailCandidate | None:
+        existing = self.get(project_id, thumbnail_id)
+        if existing is None:
+            return None
+
+        timestamp = utc_now()
+        self.connection.execute(
+            """
+            UPDATE thumbnail_candidates
+            SET status = ?, updated_at = ?
+            WHERE project_id = ? AND id = ?
+            """,
+            (status, timestamp, project_id, thumbnail_id),
+        )
+        if status == "selected":
+            self.connection.execute(
+                """
+                UPDATE video_projects
+                SET selected_thumbnail_candidate_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (thumbnail_id, timestamp, project_id),
+            )
+        self.connection.commit()
+        return self.get(project_id, thumbnail_id)
+
+
 def ensure_local_user(
     connection: sqlite3.Connection,
     user_id: str,
@@ -778,6 +984,32 @@ def _segment_from_row(row: sqlite3.Row) -> VideoSegment:
 
 
 def _warnings_from_json(value: str) -> tuple[str, ...]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    parsed_items = cast(list[object], parsed)
+    return tuple(item for item in parsed_items if isinstance(item, str))
+
+
+def _thumbnail_from_row(row: sqlite3.Row) -> ThumbnailCandidate:
+    return ThumbnailCandidate(
+        id=row["id"],
+        project_id=row["project_id"],
+        timestamp_ms=row["timestamp_ms"],
+        image_asset_id=row["image_asset_id"],
+        reason=row["reason"],
+        tags=_tags_from_json(row["tags_json"]),
+        status=row["status"],
+        internal_score=row["internal_score"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _tags_from_json(value: str) -> tuple[str, ...]:
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError:

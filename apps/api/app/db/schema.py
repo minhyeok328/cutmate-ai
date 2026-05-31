@@ -181,6 +181,24 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS thumbnail_candidates (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES video_projects(id),
+            timestamp_ms INTEGER NOT NULL CHECK (timestamp_ms >= 0),
+            image_asset_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'selected', 'rejected', 'custom_selected')
+            ),
+            internal_score REAL NOT NULL CHECK (
+                internal_score >= 0.0 AND internal_score <= 1.0
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_owner_deleted_created
             ON video_projects(owner_id, deleted_at, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_projects_owner_status
@@ -197,6 +215,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             ON subtitles(project_id, start_ms, end_ms);
         CREATE INDEX IF NOT EXISTS idx_segments_project_type_time
             ON video_segments(project_id, segment_type, start_ms, end_ms);
+        CREATE INDEX IF NOT EXISTS idx_thumbnails_project_status_time
+            ON thumbnail_candidates(project_id, status, timestamp_ms);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_one_active_per_project
             ON analysis_jobs(project_id)
             WHERE status IN ('queued', 'processing', 'retrying');

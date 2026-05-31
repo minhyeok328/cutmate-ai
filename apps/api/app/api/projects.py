@@ -24,6 +24,9 @@ from app.db.repositories import (
     AnalysisResultRepository,
     Subtitle,
     SubtitleCreate,
+    ThumbnailCandidate,
+    ThumbnailCandidateCreate,
+    ThumbnailCandidateRepository,
     VideoProject,
     VideoProjectCreate,
     VideoProjectRepository,
@@ -44,6 +47,7 @@ from app.media.storage import (
     UnsupportedMediaExtensionError,
     UploadTooLargeError,
 )
+from app.thumbnails.draft import build_thumbnail_candidates
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -62,6 +66,14 @@ class SubtitleUpdateRequest(BaseModel):
 
 class SegmentUpdateRequest(BaseModel):
     status: Literal["pending", "accepted", "rejected", "modified"]
+
+
+class ThumbnailUpdateRequest(BaseModel):
+    status: Literal["pending", "selected", "rejected"]
+
+
+class DirectFrameRequest(BaseModel):
+    timestamp_ms: int = Field(ge=0)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -278,6 +290,91 @@ def update_project_segment(
     return {"segment": _segment_dto(segment)}
 
 
+@router.post("/{project_id}/thumbnails/generate")
+def generate_project_thumbnails(project_id: str) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+
+        draft_candidates = build_thumbnail_candidates(project.duration_ms, count=3)
+        thumbnails = ThumbnailCandidateRepository(connection).replace_generated_candidates(
+            owner_id=project.owner_id,
+            project_id=project.id,
+            candidates=tuple(
+                ThumbnailCandidateCreate(
+                    id=candidate.id,
+                    image_asset_id=candidate.image_asset_id,
+                    timestamp_ms=candidate.timestamp_ms,
+                    reason=candidate.reason,
+                    tags=candidate.tags,
+                    internal_score=candidate.internal_score,
+                )
+                for candidate in draft_candidates
+            ),
+        )
+    return {"thumbnail_candidates": [_thumbnail_dto(thumbnail) for thumbnail in thumbnails]}
+
+
+@router.patch("/{project_id}/thumbnails/{thumbnail_id}")
+def update_project_thumbnail(
+    project_id: str,
+    thumbnail_id: str,
+    request: ThumbnailUpdateRequest,
+) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+
+        thumbnail = ThumbnailCandidateRepository(connection).update_status(
+            project_id=project_id,
+            thumbnail_id=thumbnail_id,
+            status=request.status,
+        )
+        if thumbnail is None:
+            raise _api_error(
+                404,
+                "THUMBNAIL_NOT_FOUND",
+                "Thumbnail candidate was not found.",
+            )
+    return {"thumbnail": _thumbnail_dto(thumbnail)}
+
+
+@router.post("/{project_id}/thumbnails/direct-frame")
+def create_direct_frame_thumbnail(
+    project_id: str,
+    request: DirectFrameRequest,
+) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+        if request.timestamp_ms > project.duration_ms:
+            raise _api_error(400, "VALIDATION_FAILED", "Timestamp exceeds video duration.")
+
+        thumbnail = ThumbnailCandidateRepository(connection).create_direct_frame(
+            owner_id=project.owner_id,
+            project_id=project.id,
+            candidate=ThumbnailCandidateCreate(
+                id=_new_id("thumbnail"),
+                image_asset_id=_new_id("asset"),
+                timestamp_ms=request.timestamp_ms,
+                reason="Direct frame selected by the user.",
+                tags=("direct_frame",),
+                internal_score=1.0,
+                status="custom_selected",
+            ),
+        )
+    return {"thumbnail": _thumbnail_dto(thumbnail)}
+
+
 def _save_upload(
     project_id: str,
     source_file_name: str,
@@ -474,6 +571,17 @@ def _segment_dto(segment: VideoSegment) -> dict[str, object]:
         "transcript": segment.transcript,
         "reason": segment.reason,
         "status": segment.status,
+    }
+
+
+def _thumbnail_dto(thumbnail: ThumbnailCandidate) -> dict[str, object]:
+    return {
+        "thumbnail_id": thumbnail.id,
+        "timestamp_ms": thumbnail.timestamp_ms,
+        "image_url": f"/api/v1/media/{thumbnail.image_asset_id}",
+        "reason": thumbnail.reason,
+        "tags": list(thumbnail.tags),
+        "status": thumbnail.status,
     }
 
 
