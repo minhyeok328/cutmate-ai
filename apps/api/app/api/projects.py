@@ -5,10 +5,12 @@ import secrets
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
+from app.analysis.draft import DraftMedia, build_draft_analysis
 from app.core.config import ANALYSIS_MODES, MAX_UPLOAD_BYTES, get_settings
 from app.core.paths import resolve_workspace_path
 from app.db.connection import connect
@@ -17,9 +19,17 @@ from app.db.repositories import (
     AnalysisJob,
     AnalysisJobCreate,
     AnalysisJobRepository,
+    AnalysisJobUpdate,
+    AnalysisResult,
+    AnalysisResultRepository,
+    Subtitle,
+    SubtitleCreate,
     VideoProject,
     VideoProjectCreate,
     VideoProjectRepository,
+    VideoSegment,
+    VideoSegmentCreate,
+    utc_now,
 )
 from app.db.schema import initialize_schema
 from app.media.probe import (
@@ -42,6 +52,16 @@ OUTPUT_GOALS = frozenset(
     {"source_summary", "highlight_extraction", "subtitle_generation", "short_form_conversion"}
 )
 SAFE_DISPLAY_NAME_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class SubtitleUpdateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2_000)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+
+
+class SegmentUpdateRequest(BaseModel):
+    status: Literal["pending", "accepted", "rejected", "modified"]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -111,6 +131,151 @@ async def create_project(
         "project": _project_dto(project),
         "analysis_job": _analysis_job_dto(job),
     }
+
+
+@router.post("/{project_id}/analysis/run")
+def run_project_analysis(project_id: str) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        projects = VideoProjectRepository(connection)
+        jobs = AnalysisJobRepository(connection)
+        results = AnalysisResultRepository(connection)
+
+        project = projects.get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+
+        job = jobs.get_latest_for_project(project_id)
+        if job is None:
+            raise _api_error(
+                404,
+                "ANALYSIS_JOB_NOT_FOUND",
+                "Analysis job was not found for this project.",
+            )
+
+        draft = build_draft_analysis(
+            DraftMedia(
+                duration_ms=project.duration_ms,
+                has_audio=project.has_audio,
+                purpose=project.purpose,
+                output_goal=project.output_goal,
+            )
+        )
+        analysis_status = "completed_with_warnings" if draft.warnings else "completed"
+        analysis = results.replace_for_project(
+            result_id=_new_id("analysis_result"),
+            owner_id=project.owner_id,
+            project_id=project.id,
+            job_id=job.id,
+            status=analysis_status,
+            warnings=draft.warnings,
+            subtitles=tuple(
+                SubtitleCreate(
+                    id=subtitle.id,
+                    start_ms=subtitle.start_ms,
+                    end_ms=subtitle.end_ms,
+                    text=subtitle.text,
+                )
+                for subtitle in draft.subtitles
+            ),
+            segments=tuple(
+                VideoSegmentCreate(
+                    id=segment.id,
+                    segment_type=segment.segment_type,
+                    start_ms=segment.start_ms,
+                    end_ms=segment.end_ms,
+                    transcript=segment.transcript,
+                    reason=segment.reason,
+                )
+                for segment in (*draft.cut_candidates, *draft.highlight_candidates)
+            ),
+        )
+        completed_job = jobs.update(
+            job.id,
+            AnalysisJobUpdate(
+                status=analysis_status,
+                progress_percent=100,
+                current_step="draft_generation",
+                completed_at=utc_now(),
+            ),
+        )
+        projects.update_status(project.id, "draft_ready")
+
+    if completed_job is None:
+        raise _api_error(500, "ANALYSIS_JOB_UPDATE_FAILED", "Analysis job update failed.")
+    return {"analysis_job": _analysis_job_dto(completed_job), "analysis": _analysis_dto(analysis)}
+
+
+@router.get("/{project_id}/analysis")
+def get_project_analysis(project_id: str) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+        analysis = AnalysisResultRepository(connection).get_by_project(project_id)
+        if analysis is None:
+            raise _api_error(
+                404,
+                "ANALYSIS_NOT_FOUND",
+                "Analysis result was not found for this project.",
+            )
+    return {"analysis": _analysis_dto(analysis)}
+
+
+@router.patch("/{project_id}/subtitles/{subtitle_id}")
+def update_project_subtitle(
+    project_id: str,
+    subtitle_id: str,
+    request: SubtitleUpdateRequest,
+) -> dict[str, object]:
+    if request.end_ms <= request.start_ms:
+        raise _api_error(400, "VALIDATION_FAILED", "Subtitle end time must be after start time.")
+
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+        if request.end_ms > project.duration_ms:
+            raise _api_error(400, "VALIDATION_FAILED", "Subtitle timing exceeds video duration.")
+
+        subtitle = AnalysisResultRepository(connection).update_subtitle(
+            project_id=project_id,
+            subtitle_id=subtitle_id,
+            edited_text=request.text.strip(),
+            start_ms=request.start_ms,
+            end_ms=request.end_ms,
+        )
+        if subtitle is None:
+            raise _api_error(404, "SUBTITLE_NOT_FOUND", "Subtitle was not found.")
+    return {"subtitle": _subtitle_dto(subtitle)}
+
+
+@router.patch("/{project_id}/segments/{segment_id}")
+def update_project_segment(
+    project_id: str,
+    segment_id: str,
+    request: SegmentUpdateRequest,
+) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+
+        segment = AnalysisResultRepository(connection).update_segment_status(
+            project_id=project_id,
+            segment_id=segment_id,
+            status=request.status,
+        )
+        if segment is None:
+            raise _api_error(404, "SEGMENT_NOT_FOUND", "Segment was not found.")
+    return {"segment": _segment_dto(segment)}
 
 
 def _save_upload(
@@ -272,6 +437,43 @@ def _analysis_job_dto(job: AnalysisJob) -> dict[str, object]:
         "started_at": job.started_at,
         "completed_at": job.completed_at,
         "updated_at": job.updated_at,
+    }
+
+
+def _subtitle_dto(subtitle: Subtitle) -> dict[str, object]:
+    return {
+        "subtitle_id": subtitle.id,
+        "start_ms": subtitle.start_ms,
+        "end_ms": subtitle.end_ms,
+        "text": subtitle.text,
+        "edited_text": subtitle.edited_text,
+        "status": subtitle.status,
+    }
+
+
+def _analysis_dto(analysis: AnalysisResult) -> dict[str, object]:
+    return {
+        "project_id": analysis.project_id,
+        "job_id": analysis.job_id,
+        "status": analysis.status,
+        "warnings": list(analysis.warnings),
+        "subtitles": [_subtitle_dto(subtitle) for subtitle in analysis.subtitles],
+        "cut_candidates": [_segment_dto(segment) for segment in analysis.cut_candidates],
+        "highlight_candidates": [
+            _segment_dto(segment) for segment in analysis.highlight_candidates
+        ],
+    }
+
+
+def _segment_dto(segment: VideoSegment) -> dict[str, object]:
+    return {
+        "segment_id": segment.id,
+        "type": segment.segment_type,
+        "start_ms": segment.start_ms,
+        "end_ms": segment.end_ms,
+        "transcript": segment.transcript,
+        "reason": segment.reason,
+        "status": segment.status,
     }
 
 

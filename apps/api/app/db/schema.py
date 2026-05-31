@@ -138,6 +138,49 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS analysis_results (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES video_projects(id),
+            job_id TEXT NOT NULL REFERENCES analysis_jobs(id),
+            status TEXT NOT NULL CHECK (status IN ('completed', 'completed_with_warnings')),
+            warnings_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS subtitles (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES video_projects(id),
+            analysis_result_id TEXT NOT NULL REFERENCES analysis_results(id) ON DELETE CASCADE,
+            start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+            end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+            text TEXT NOT NULL,
+            edited_text TEXT,
+            status TEXT NOT NULL CHECK (status IN ('draft', 'edited')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS video_segments (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES video_projects(id),
+            analysis_result_id TEXT NOT NULL REFERENCES analysis_results(id) ON DELETE CASCADE,
+            segment_type TEXT NOT NULL CHECK (segment_type IN ('cut', 'highlight')),
+            start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+            end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+            transcript TEXT,
+            recommendation_reason TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+                status IN ('pending', 'accepted', 'rejected', 'modified')
+            ),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_owner_deleted_created
             ON video_projects(owner_id, deleted_at, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_projects_owner_status
@@ -150,6 +193,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             ON analysis_jobs(project_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analysis_jobs_owner_status
             ON analysis_jobs(owner_id, status);
+        CREATE INDEX IF NOT EXISTS idx_subtitles_project_time
+            ON subtitles(project_id, start_ms, end_ms);
+        CREATE INDEX IF NOT EXISTS idx_segments_project_type_time
+            ON video_segments(project_id, segment_type, start_ms, end_ms);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_one_active_per_project
             ON analysis_jobs(project_id)
             WHERE status IN ('queued', 'processing', 'retrying');
