@@ -473,9 +473,17 @@ button:disabled {
   min-height: 32px;
 }
 
-.segmented-control button:nth-child(2) {
+.segmented-control button[data-active="true"] {
   background: #e7efff;
   color: var(--accent-strong);
+}
+
+.export-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 @media (max-width: 960px) {

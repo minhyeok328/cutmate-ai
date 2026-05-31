@@ -74,6 +74,19 @@ type ThumbnailCandidate = {
   status: "pending" | "selected" | "rejected" | "custom_selected";
 };
 
+type ExportJob = {
+  export_id: string;
+  project_id: string;
+  status: "queued" | "rendering" | "completed" | "failed" | "retrying";
+  aspect_ratio: "original" | "9:16" | "1:1";
+  resolution: string;
+  include_subtitles: boolean;
+  include_thumbnail: boolean;
+  crop_mode: "center" | "manual";
+  download_url: string;
+  thumbnail_download_url: string | null;
+};
+
 export default function WorkspacePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -86,6 +99,10 @@ export default function WorkspacePage() {
   const [createdProject, setCreatedProject] = useState<ProjectCreateResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse["analysis"] | null>(null);
   const [thumbnailCandidates, setThumbnailCandidates] = useState<ThumbnailCandidate[]>([]);
+  const [exportAspectRatio, setExportAspectRatio] = useState<ExportJob["aspect_ratio"]>("original");
+  const [includeSubtitles, setIncludeSubtitles] = useState(true);
+  const [includeThumbnail, setIncludeThumbnail] = useState(true);
+  const [exportJob, setExportJob] = useState<ExportJob | null>(null);
 
   const pipelineSteps = useMemo(
     () => [
@@ -140,6 +157,7 @@ export default function WorkspacePage() {
       setCreatedProject(projectResponse);
       setAnalysisResult(null);
       setThumbnailCandidates([]);
+      setExportJob(null);
       setStatusMessage(`Queued ${projectResponse.analysis_job.mode} analysis locally.`);
     } catch {
       setStatusMessage("Local API is unavailable.");
@@ -349,6 +367,46 @@ export default function WorkspacePage() {
       setStatusMessage("Direct frame thumbnail selected.");
     } catch {
       setStatusMessage("Could not select direct frame thumbnail.");
+    }
+  }
+
+  async function createExport() {
+    if (!createdProject) {
+      setStatusMessage("Create a project before rendering.");
+      return;
+    }
+
+    const resolution =
+      exportAspectRatio === "9:16"
+        ? "1080x1920"
+        : exportAspectRatio === "1:1"
+          ? "1080x1080"
+          : `${createdProject.project.metadata.width}x${createdProject.project.metadata.height}`;
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/exports`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            aspect_ratio: exportAspectRatio,
+            resolution,
+            include_subtitles: includeSubtitles,
+            include_thumbnail: includeThumbnail,
+            crop_mode: "center"
+          })
+        }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const created = (payload as { export_job: ExportJob }).export_job;
+      setExportJob(created);
+      setStatusMessage("Export render completed locally.");
+    } catch {
+      setStatusMessage("Could not create export job.");
     }
   }
 
@@ -579,13 +637,41 @@ export default function WorkspacePage() {
           <div>
             <p className="eyebrow">Output</p>
             <h2>Render Queue</h2>
+            {exportJob ? (
+              <p className="compact-copy">
+                {exportJob.status} | {exportJob.resolution} | {exportJob.download_url}
+              </p>
+            ) : null}
           </div>
           <div className="segmented-control" aria-label="Aspect ratio">
-            <button type="button">Original</button>
-            <button type="button">9:16</button>
-            <button type="button">1:1</button>
+            {(["original", "9:16", "1:1"] as const).map((aspectRatio) => (
+              <button
+                key={aspectRatio}
+                type="button"
+                data-active={exportAspectRatio === aspectRatio}
+                onClick={() => setExportAspectRatio(aspectRatio)}
+              >
+                {aspectRatio === "original" ? "Original" : aspectRatio}
+              </button>
+            ))}
           </div>
-          <button type="button" className="primary-action">
+          <label className="export-toggle">
+            <input
+              type="checkbox"
+              checked={includeSubtitles}
+              onChange={(event) => setIncludeSubtitles(event.target.checked)}
+            />
+            Subtitles
+          </label>
+          <label className="export-toggle">
+            <input
+              type="checkbox"
+              checked={includeThumbnail}
+              onChange={(event) => setIncludeThumbnail(event.target.checked)}
+            />
+            Thumbnail
+          </label>
+          <button type="button" className="primary-action" onClick={createExport}>
             Render
           </button>
         </section>
