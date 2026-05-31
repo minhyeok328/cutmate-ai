@@ -1,9 +1,10 @@
 "use client";
 
 import type { ChangeEvent, FormEvent } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { runtimeConfig, type AnalysisMode } from "@/lib/config";
+import { startDesktopApiSidecar } from "@/lib/desktop-runtime";
 import { WORKSPACE_COPY } from "@/lib/workspace-copy";
 
 type ContentPurpose = "short_form" | "vlog" | "lecture" | "interview" | "promotional_video";
@@ -125,6 +126,10 @@ export default function WorkspacePage() {
   const [includeSubtitles, setIncludeSubtitles] = useState(true);
   const [includeThumbnail, setIncludeThumbnail] = useState(true);
   const [exportJob, setExportJob] = useState<ExportJob | null>(null);
+
+  useEffect(() => {
+    void startDesktopApiSidecar();
+  }, []);
 
   const timelineItems = useMemo(
     () =>

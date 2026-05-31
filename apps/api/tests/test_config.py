@@ -19,6 +19,12 @@ def test_default_settings_are_local_first() -> None:
     assert settings.max_upload_bytes == 2_147_483_648
 
 
+def test_settings_include_tauri_desktop_origins() -> None:
+    settings = get_settings()
+    assert "tauri://localhost" in settings.cors_origins
+    assert settings.app_url in settings.cors_origins
+
+
 def test_public_runtime_config_does_not_require_openai_api_key() -> None:
     config = get_public_runtime_config()
 

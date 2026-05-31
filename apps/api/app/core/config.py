@@ -25,6 +25,11 @@ class Settings:
     external_api_mode: str = EXTERNAL_API_MODE
     max_duration_seconds: int = 20 * 60
     max_upload_bytes: int = MAX_UPLOAD_BYTES
+    desktop_app_origins: tuple[str, ...] = ("tauri://localhost", "http://tauri.localhost")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [self.app_url, *self.desktop_app_origins]
 
 
 def _read_env(name: str, fallback: str) -> str:
