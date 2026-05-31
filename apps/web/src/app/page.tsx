@@ -4,6 +4,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { useMemo, useState } from "react";
 
 import { runtimeConfig, type AnalysisMode } from "@/lib/config";
+import { WORKSPACE_COPY } from "@/lib/workspace-copy";
 
 type ContentPurpose = "short_form" | "vlog" | "lecture" | "interview" | "promotional_video";
 type OutputGoal =
@@ -95,7 +96,7 @@ export default function WorkspacePage() {
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("standard");
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("Ready for a local upload.");
+  const [statusMessage, setStatusMessage] = useState<string>(WORKSPACE_COPY.status.ready);
   const [createdProject, setCreatedProject] = useState<ProjectCreateResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse["analysis"] | null>(null);
   const [thumbnailCandidates, setThumbnailCandidates] = useState<ThumbnailCandidate[]>([]);
