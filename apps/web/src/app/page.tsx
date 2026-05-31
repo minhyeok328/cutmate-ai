@@ -33,11 +33,37 @@ type ProjectCreateResponse = {
   };
 };
 
-const timelineItems = [
-  { time: "00:18", kind: "Cut", title: "Long pause", status: "Pending" },
-  { time: "01:42", kind: "Highlight", title: "Key explanation", status: "Pending" },
-  { time: "03:06", kind: "Subtitle", title: "Manual sync", status: "Draft" }
-];
+type SubtitleDraft = {
+  subtitle_id: string;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  edited_text: string | null;
+  status: "draft" | "edited";
+};
+
+type SegmentDraft = {
+  segment_id: string;
+  type: "cut" | "highlight";
+  start_ms: number;
+  end_ms: number;
+  transcript: string | null;
+  reason: string;
+  status: "pending" | "accepted" | "rejected" | "modified";
+};
+
+type AnalysisResponse = {
+  analysis_job?: ProjectCreateResponse["analysis_job"];
+  analysis: {
+    project_id: string;
+    job_id: string;
+    status: "completed" | "completed_with_warnings";
+    warnings: string[];
+    subtitles: SubtitleDraft[];
+    cut_candidates: SegmentDraft[];
+    highlight_candidates: SegmentDraft[];
+  };
+};
 
 const thumbnailCandidates = [
   { time: "01:44", reason: "Sharp frame" },
@@ -52,8 +78,10 @@ export default function WorkspacePage() {
   const [outputGoal, setOutputGoal] = useState<OutputGoal>("highlight_extraction");
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("standard");
   const [uploading, setUploading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [statusMessage, setStatusMessage] = useState("Ready for a local upload.");
   const [createdProject, setCreatedProject] = useState<ProjectCreateResponse | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResponse["analysis"] | null>(null);
 
   const pipelineSteps = useMemo(
     () => [
@@ -64,14 +92,19 @@ export default function WorkspacePage() {
       },
       {
         label: "Analysis",
-        state: createdProject?.analysis_job.status ?? "Queued",
-        value: createdProject?.analysis_job.progress_percent ?? 0
+        state: analysisResult?.status ?? createdProject?.analysis_job.status ?? "Queued",
+        value: analysisResult ? 100 : (createdProject?.analysis_job.progress_percent ?? 0)
       },
-      { label: "Draft", state: createdProject ? "Waiting" : "Idle", value: 0 },
+      { label: "Draft", state: analysisResult ? "Ready" : createdProject ? "Waiting" : "Idle", value: analysisResult ? 100 : 0 },
       { label: "Export", state: "Idle", value: 0 }
     ],
-    [createdProject, selectedFile]
+    [analysisResult, createdProject, selectedFile]
   );
+
+  const timelineItems = [
+    ...(analysisResult?.cut_candidates ?? []),
+    ...(analysisResult?.highlight_candidates ?? [])
+  ].sort((first, second) => first.start_ms - second.start_ms);
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -101,6 +134,7 @@ export default function WorkspacePage() {
       }
       const projectResponse = payload as ProjectCreateResponse;
       setCreatedProject(projectResponse);
+      setAnalysisResult(null);
       setStatusMessage(`Queued ${projectResponse.analysis_job.mode} analysis locally.`);
     } catch {
       setStatusMessage("Local API is unavailable.");
@@ -113,6 +147,111 @@ export default function WorkspacePage() {
     const nextFile = event.target.files?.[0] ?? null;
     setSelectedFile(nextFile);
     setStatusMessage(nextFile ? `${nextFile.name} selected.` : "Ready for a local upload.");
+  }
+
+  async function handleRunAnalysis() {
+    if (!createdProject) {
+      setStatusMessage("Create a project before analysis.");
+      return;
+    }
+
+    setAnalyzing(true);
+    setStatusMessage("Running local deterministic analysis...");
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/analysis/run`,
+        { method: "POST" }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const analysisPayload = payload as AnalysisResponse;
+      setAnalysisResult(analysisPayload.analysis);
+      setStatusMessage("Draft analysis is ready for review.");
+    } catch {
+      setStatusMessage("Local analysis API is unavailable.");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function handleSubtitleSave(event: FormEvent<HTMLFormElement>, subtitle: SubtitleDraft) {
+    event.preventDefault();
+    if (!createdProject || !analysisResult) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const text = String(formData.get("text") ?? "").trim();
+    if (!text) {
+      setStatusMessage("Subtitle text cannot be empty.");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/subtitles/${subtitle.subtitle_id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            start_ms: subtitle.start_ms,
+            end_ms: subtitle.end_ms
+          })
+        }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const updated = (payload as { subtitle: SubtitleDraft }).subtitle;
+      setAnalysisResult({
+        ...analysisResult,
+        subtitles: analysisResult.subtitles.map((item) =>
+          item.subtitle_id === updated.subtitle_id ? updated : item
+        )
+      });
+      setStatusMessage("Subtitle edit saved.");
+    } catch {
+      setStatusMessage("Could not save subtitle edit.");
+    }
+  }
+
+  async function updateSegmentStatus(segment: SegmentDraft, nextStatus: SegmentDraft["status"]) {
+    if (!createdProject || !analysisResult) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/segments/${segment.segment_id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus })
+        }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const updated = (payload as { segment: SegmentDraft }).segment;
+      const replaceSegment = (item: SegmentDraft) =>
+        item.segment_id === updated.segment_id ? updated : item;
+      setAnalysisResult({
+        ...analysisResult,
+        cut_candidates: analysisResult.cut_candidates.map(replaceSegment),
+        highlight_candidates: analysisResult.highlight_candidates.map(replaceSegment)
+      });
+      setStatusMessage(`${updated.type} candidate marked ${updated.status}.`);
+    } catch {
+      setStatusMessage("Could not update candidate status.");
+    }
   }
 
   return (
@@ -144,6 +283,9 @@ export default function WorkspacePage() {
           <div className="topbar-actions">
             <button type="button" className="icon-button" aria-label="Open settings">
               Settings
+            </button>
+            <button type="button" onClick={handleRunAnalysis} disabled={!createdProject || analyzing}>
+              {analyzing ? "Analyzing" : "Run Analysis"}
             </button>
             <button type="button">Export</button>
           </div>
@@ -261,12 +403,37 @@ export default function WorkspacePage() {
             </div>
             <div className="timeline-list">
               {timelineItems.map((item) => (
-                <article key={`${item.kind}-${item.time}`} className="timeline-item">
-                  <span>{item.time}</span>
-                  <strong>{item.kind}</strong>
-                  <p>{item.title}</p>
-                  <button type="button">{item.status}</button>
+                <article key={item.segment_id} className="timeline-item">
+                  <span>{formatMs(item.start_ms)}</span>
+                  <strong>{item.type === "cut" ? "Cut" : "Highlight"}</strong>
+                  <p>{item.reason}</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateSegmentStatus(item, item.status === "accepted" ? "pending" : "accepted")
+                    }
+                  >
+                    {item.status}
+                  </button>
                 </article>
+              ))}
+              {timelineItems.length === 0 ? <p className="empty-state">No draft candidates yet.</p> : null}
+            </div>
+            <div className="subtitle-list">
+              {(analysisResult?.subtitles ?? []).map((subtitle) => (
+                <form
+                  key={subtitle.subtitle_id}
+                  className="subtitle-row"
+                  onSubmit={(event) => handleSubtitleSave(event, subtitle)}
+                >
+                  <span>{formatMs(subtitle.start_ms)}</span>
+                  <input
+                    name="text"
+                    defaultValue={subtitle.edited_text ?? subtitle.text}
+                    aria-label={`Subtitle at ${formatMs(subtitle.start_ms)}`}
+                  />
+                  <button type="submit">Save</button>
+                </form>
               ))}
             </div>
           </div>
@@ -323,4 +490,11 @@ function readErrorMessage(payload: unknown): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function formatMs(value: number): string {
+  const totalSeconds = Math.max(0, Math.floor(value / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
 }

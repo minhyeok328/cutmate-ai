@@ -381,6 +381,34 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.subtitle-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.subtitle-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.subtitle-row span,
+.empty-state {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.subtitle-row input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 0 10px;
+}
+
 .thumbnail-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -458,7 +486,8 @@ button:disabled {
   .export-band,
   .section-heading,
   .upload-actions,
-  .timeline-item {
+  .timeline-item,
+  .subtitle-row {
     align-items: stretch;
     flex-direction: column;
     grid-template-columns: 1fr;
