@@ -9,8 +9,9 @@
     "desktop:dev": "tauri dev",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm test:desktop-config && pnpm -r test",
+    "test": "pnpm test:desktop-config && pnpm test:desktop-workflow && pnpm -r test",
     "test:desktop-config": "node scripts/verify-tauri-config.mjs",
+    "test:desktop-workflow": "node scripts/verify-macos-workflow.mjs",
     "build": "pnpm -r build"
   },
   "engines": {

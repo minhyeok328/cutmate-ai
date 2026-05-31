@@ -1,0 +1,64 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build unsigned macOS DMG
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python dependencies
+        run: uv sync --project apps/api --dev
+
+      - name: Build API sidecar
+        working-directory: apps/api
+        run: |
+          uv run pyinstaller --onefile --name cutmate-api --collect-submodules app app/desktop_sidecar.py
+          TARGET_TRIPLE="$(rustc -Vv | awk '/host:/ {print $2}')"
+          mkdir -p ../../src-tauri/binaries
+          cp dist/cutmate-api "../../src-tauri/binaries/cutmate-api-${TARGET_TRIPLE}"
+          chmod +x "../../src-tauri/binaries/cutmate-api-${TARGET_TRIPLE}"
+
+      - name: Run verification
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+          cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Build unsigned DMG
+        run: pnpm desktop:build
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cutmate-ai-macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 3
