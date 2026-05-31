@@ -48,3 +48,6 @@ __pycache__/
 *.log
 pnpm-debug.log*
 npm-debug.log*
+
+# Local design scratchpads
+.superpowers/
