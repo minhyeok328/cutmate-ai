@@ -199,6 +199,34 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS export_jobs (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id),
+            project_id TEXT NOT NULL REFERENCES video_projects(id),
+            status TEXT NOT NULL CHECK (
+                status IN ('queued', 'rendering', 'completed', 'failed', 'retrying')
+            ),
+            aspect_ratio TEXT NOT NULL CHECK (aspect_ratio IN ('original', '9:16', '1:1')),
+            resolution TEXT NOT NULL,
+            include_subtitles INTEGER NOT NULL CHECK (include_subtitles IN (0, 1)),
+            include_thumbnail INTEGER NOT NULL CHECK (include_thumbnail IN (0, 1)),
+            crop_mode TEXT NOT NULL CHECK (crop_mode IN ('center', 'manual')),
+            output_asset_id TEXT NOT NULL,
+            thumbnail_asset_id TEXT,
+            error_code TEXT,
+            error_summary TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS metric_events (
+            id TEXT PRIMARY KEY,
+            event_name TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_projects_owner_deleted_created
             ON video_projects(owner_id, deleted_at, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_projects_owner_status
@@ -217,6 +245,10 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             ON video_segments(project_id, segment_type, start_ms, end_ms);
         CREATE INDEX IF NOT EXISTS idx_thumbnails_project_status_time
             ON thumbnail_candidates(project_id, status, timestamp_ms);
+        CREATE INDEX IF NOT EXISTS idx_export_jobs_project_created
+            ON export_jobs(project_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_metric_events_name_created
+            ON metric_events(event_name, created_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_analysis_one_active_per_project
             ON analysis_jobs(project_id)
             WHERE status IN ('queued', 'processing', 'retrying');

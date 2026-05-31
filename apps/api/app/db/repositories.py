@@ -181,6 +181,48 @@ class ThumbnailCandidate:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class ExportJobCreate:
+    id: str
+    owner_id: str
+    project_id: str
+    aspect_ratio: str
+    resolution: str
+    include_subtitles: bool
+    include_thumbnail: bool
+    crop_mode: str
+    output_asset_id: str
+    thumbnail_asset_id: str | None
+
+
+@dataclass(frozen=True)
+class ExportJob:
+    id: str
+    owner_id: str
+    project_id: str
+    status: str
+    aspect_ratio: str
+    resolution: str
+    include_subtitles: bool
+    include_thumbnail: bool
+    crop_mode: str
+    output_asset_id: str
+    thumbnail_asset_id: str | None
+    error_code: str | None
+    error_summary: str | None
+    created_at: str
+    completed_at: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class MetricEvent:
+    id: str
+    event_name: str
+    metadata: dict[str, object]
+    created_at: str
+
+
 class VideoProjectRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
@@ -892,6 +934,117 @@ class ThumbnailCandidateRepository:
         return self.get(project_id, thumbnail_id)
 
 
+class ExportJobRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create_completed(self, data: ExportJobCreate) -> ExportJob:
+        timestamp = utc_now()
+        self.connection.execute(
+            """
+            INSERT INTO export_jobs (
+                id,
+                owner_id,
+                project_id,
+                status,
+                aspect_ratio,
+                resolution,
+                include_subtitles,
+                include_thumbnail,
+                crop_mode,
+                output_asset_id,
+                thumbnail_asset_id,
+                created_at,
+                completed_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data.id,
+                data.owner_id,
+                data.project_id,
+                data.aspect_ratio,
+                data.resolution,
+                1 if data.include_subtitles else 0,
+                1 if data.include_thumbnail else 0,
+                data.crop_mode,
+                data.output_asset_id,
+                data.thumbnail_asset_id,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.connection.commit()
+        created = self.get(data.project_id, data.id)
+        if created is None:
+            raise RuntimeError("Failed to fetch created export job.")
+        return created
+
+    def get(self, project_id: str, export_id: str) -> ExportJob | None:
+        row = self.connection.execute(
+            """
+            SELECT
+                id,
+                owner_id,
+                project_id,
+                status,
+                aspect_ratio,
+                resolution,
+                include_subtitles,
+                include_thumbnail,
+                crop_mode,
+                output_asset_id,
+                thumbnail_asset_id,
+                error_code,
+                error_summary,
+                created_at,
+                completed_at,
+                updated_at
+            FROM export_jobs
+            WHERE project_id = ? AND id = ?
+            """,
+            (project_id, export_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return _export_job_from_row(row)
+
+
+class MetricEventRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def create(
+        self,
+        *,
+        event_id: str,
+        event_name: str,
+        metadata: dict[str, object],
+    ) -> MetricEvent:
+        timestamp = utc_now()
+        self.connection.execute(
+            """
+            INSERT INTO metric_events (id, event_name, metadata_json, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                event_name,
+                json.dumps(metadata, separators=(",", ":")),
+                timestamp,
+            ),
+        )
+        self.connection.commit()
+        return MetricEvent(
+            id=event_id,
+            event_name=event_name,
+            metadata=metadata,
+            created_at=timestamp,
+        )
+
+
 def ensure_local_user(
     connection: sqlite3.Connection,
     user_id: str,
@@ -1018,3 +1171,24 @@ def _tags_from_json(value: str) -> tuple[str, ...]:
         return ()
     parsed_items = cast(list[object], parsed)
     return tuple(item for item in parsed_items if isinstance(item, str))
+
+
+def _export_job_from_row(row: sqlite3.Row) -> ExportJob:
+    return ExportJob(
+        id=row["id"],
+        owner_id=row["owner_id"],
+        project_id=row["project_id"],
+        status=row["status"],
+        aspect_ratio=row["aspect_ratio"],
+        resolution=row["resolution"],
+        include_subtitles=bool(row["include_subtitles"]),
+        include_thumbnail=bool(row["include_thumbnail"]),
+        crop_mode=row["crop_mode"],
+        output_asset_id=row["output_asset_id"],
+        thumbnail_asset_id=row["thumbnail_asset_id"],
+        error_code=row["error_code"],
+        error_summary=row["error_summary"],
+        created_at=row["created_at"],
+        completed_at=row["completed_at"],
+        updated_at=row["updated_at"],
+    )

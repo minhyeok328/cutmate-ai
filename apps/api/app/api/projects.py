@@ -22,6 +22,9 @@ from app.db.repositories import (
     AnalysisJobUpdate,
     AnalysisResult,
     AnalysisResultRepository,
+    ExportJob,
+    ExportJobCreate,
+    ExportJobRepository,
     Subtitle,
     SubtitleCreate,
     ThumbnailCandidate,
@@ -74,6 +77,14 @@ class ThumbnailUpdateRequest(BaseModel):
 
 class DirectFrameRequest(BaseModel):
     timestamp_ms: int = Field(ge=0)
+
+
+class ExportCreateRequest(BaseModel):
+    aspect_ratio: Literal["original", "9:16", "1:1"]
+    resolution: str = Field(min_length=3, max_length=24)
+    include_subtitles: bool = False
+    include_thumbnail: bool = False
+    crop_mode: Literal["center", "manual"] = "center"
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -375,6 +386,49 @@ def create_direct_frame_thumbnail(
     return {"thumbnail": _thumbnail_dto(thumbnail)}
 
 
+@router.post("/{project_id}/exports")
+def create_project_export(
+    project_id: str,
+    request: ExportCreateRequest,
+) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+
+        export_job = ExportJobRepository(connection).create_completed(
+            ExportJobCreate(
+                id=_new_id("export"),
+                owner_id=project.owner_id,
+                project_id=project.id,
+                aspect_ratio=request.aspect_ratio,
+                resolution=request.resolution,
+                include_subtitles=request.include_subtitles,
+                include_thumbnail=request.include_thumbnail,
+                crop_mode=request.crop_mode,
+                output_asset_id=_new_id("asset"),
+                thumbnail_asset_id=_new_id("asset") if request.include_thumbnail else None,
+            )
+        )
+    return {"export_job": _export_job_dto(export_job)}
+
+
+@router.get("/{project_id}/exports/{export_id}")
+def get_project_export(project_id: str, export_id: str) -> dict[str, object]:
+    db_path = resolve_workspace_path(get_settings().sqlite_path)
+    with connect(db_path) as connection:
+        initialize_schema(connection)
+        project = VideoProjectRepository(connection).get(project_id)
+        if project is None:
+            raise _api_error(404, "PROJECT_NOT_FOUND", "Project was not found.")
+        export_job = ExportJobRepository(connection).get(project_id, export_id)
+        if export_job is None:
+            raise _api_error(404, "EXPORT_NOT_FOUND", "Export job was not found.")
+    return {"export_job": _export_job_dto(export_job)}
+
+
 def _save_upload(
     project_id: str,
     source_file_name: str,
@@ -582,6 +636,28 @@ def _thumbnail_dto(thumbnail: ThumbnailCandidate) -> dict[str, object]:
         "reason": thumbnail.reason,
         "tags": list(thumbnail.tags),
         "status": thumbnail.status,
+    }
+
+
+def _export_job_dto(export_job: ExportJob) -> dict[str, object]:
+    return {
+        "export_id": export_job.id,
+        "project_id": export_job.project_id,
+        "status": export_job.status,
+        "aspect_ratio": export_job.aspect_ratio,
+        "resolution": export_job.resolution,
+        "include_subtitles": export_job.include_subtitles,
+        "include_thumbnail": export_job.include_thumbnail,
+        "crop_mode": export_job.crop_mode,
+        "download_url": f"/api/v1/downloads/{export_job.output_asset_id}",
+        "thumbnail_download_url": (
+            f"/api/v1/downloads/{export_job.thumbnail_asset_id}"
+            if export_job.thumbnail_asset_id is not None
+            else None
+        ),
+        "error": None,
+        "created_at": export_job.created_at,
+        "completed_at": export_job.completed_at,
     }
 
 
