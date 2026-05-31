@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { WORKSPACE_COPY, workflowSteps } from "./workspace-copy";
+
+const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+const globalStyles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 describe("workspace Korean copy", () => {
   it("keeps the primary workspace labels in Korean", () => {
@@ -20,5 +25,25 @@ describe("workspace Korean copy", () => {
     expect(WORKSPACE_COPY.upload.help).toContain("2GB");
     expect(WORKSPACE_COPY.upload.help).toContain("20분");
     expect(WORKSPACE_COPY.upload.help).toContain("MP4");
+  });
+
+  it("uses script-first editing language instead of generic dashboard language", () => {
+    const allCopy = JSON.stringify(WORKSPACE_COPY);
+    expect(allCopy).toContain("대본");
+    expect(allCopy).toContain("자막");
+    expect(allCopy).toContain("컷");
+    expect(allCopy).not.toContain("Review Workspace");
+    expect(allCopy).not.toContain("Render Queue");
+  });
+
+  it("keeps the desktop editor grid from forcing laptop-width overflow", () => {
+    const editorGridRule = globalStyles.match(/\.editor-grid\s*\{(?<body>[^}]*)\}/)?.groups?.body;
+
+    expect(editorGridRule).toBeDefined();
+    expect(editorGridRule).not.toMatch(/minmax\(\d+px,/);
+  });
+
+  it("announces the selected export aspect ratio to assistive tech", () => {
+    expect(pageSource).toContain("aria-pressed={exportAspectRatio === option.value}");
   });
 });
