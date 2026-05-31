@@ -65,11 +65,14 @@ type AnalysisResponse = {
   };
 };
 
-const thumbnailCandidates = [
-  { time: "01:44", reason: "Sharp frame" },
-  { time: "02:12", reason: "Subject centered" },
-  { time: "04:28", reason: "Bright scene" }
-];
+type ThumbnailCandidate = {
+  thumbnail_id: string;
+  timestamp_ms: number;
+  image_url: string;
+  reason: string;
+  tags: string[];
+  status: "pending" | "selected" | "rejected" | "custom_selected";
+};
 
 export default function WorkspacePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -82,6 +85,7 @@ export default function WorkspacePage() {
   const [statusMessage, setStatusMessage] = useState("Ready for a local upload.");
   const [createdProject, setCreatedProject] = useState<ProjectCreateResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse["analysis"] | null>(null);
+  const [thumbnailCandidates, setThumbnailCandidates] = useState<ThumbnailCandidate[]>([]);
 
   const pipelineSteps = useMemo(
     () => [
@@ -135,6 +139,7 @@ export default function WorkspacePage() {
       const projectResponse = payload as ProjectCreateResponse;
       setCreatedProject(projectResponse);
       setAnalysisResult(null);
+      setThumbnailCandidates([]);
       setStatusMessage(`Queued ${projectResponse.analysis_job.mode} analysis locally.`);
     } catch {
       setStatusMessage("Local API is unavailable.");
@@ -251,6 +256,99 @@ export default function WorkspacePage() {
       setStatusMessage(`${updated.type} candidate marked ${updated.status}.`);
     } catch {
       setStatusMessage("Could not update candidate status.");
+    }
+  }
+
+  async function generateThumbnails() {
+    if (!createdProject) {
+      setStatusMessage("Create a project before generating thumbnails.");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/thumbnails/generate`,
+        { method: "POST" }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const nextCandidates = (payload as { thumbnail_candidates: ThumbnailCandidate[] })
+        .thumbnail_candidates;
+      setThumbnailCandidates(nextCandidates);
+      setStatusMessage("Thumbnail candidates generated.");
+    } catch {
+      setStatusMessage("Could not generate thumbnail candidates.");
+    }
+  }
+
+  async function updateThumbnailStatus(
+    thumbnail: ThumbnailCandidate,
+    nextStatus: ThumbnailCandidate["status"]
+  ) {
+    if (!createdProject || nextStatus === "custom_selected") {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/thumbnails/${thumbnail.thumbnail_id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus })
+        }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const updated = (payload as { thumbnail: ThumbnailCandidate }).thumbnail;
+      setThumbnailCandidates((items) =>
+        items.map((item) => (item.thumbnail_id === updated.thumbnail_id ? updated : item))
+      );
+      setStatusMessage(`Thumbnail marked ${updated.status}.`);
+    } catch {
+      setStatusMessage("Could not update thumbnail status.");
+    }
+  }
+
+  async function createDirectFrameThumbnail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!createdProject) {
+      setStatusMessage("Create a project before selecting a frame.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const seconds = Number(formData.get("seconds") ?? 0);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      setStatusMessage("Frame timestamp must be zero or greater.");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${runtimeConfig.apiUrl}/api/v1/projects/${createdProject.project.project_id}/thumbnails/direct-frame`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timestamp_ms: Math.round(seconds * 1000) })
+        }
+      );
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        setStatusMessage(readErrorMessage(payload));
+        return;
+      }
+      const created = (payload as { thumbnail: ThumbnailCandidate }).thumbnail;
+      setThumbnailCandidates((items) => [...items, created]);
+      setStatusMessage("Direct frame thumbnail selected.");
+    } catch {
+      setStatusMessage("Could not select direct frame thumbnail.");
     }
   }
 
@@ -444,17 +542,36 @@ export default function WorkspacePage() {
                 <p className="eyebrow">Thumbnail</p>
                 <h2>Candidates</h2>
               </div>
-              <button type="button">Frame Pick</button>
+              <button type="button" onClick={generateThumbnails} disabled={!createdProject}>
+                Generate
+              </button>
             </div>
             <div className="thumbnail-grid">
               {thumbnailCandidates.map((candidate, index) => (
-                <article key={candidate.time} className="thumbnail-card">
+                <article key={candidate.thumbnail_id} className="thumbnail-card">
                   <div className="thumb-preview" data-index={index + 1} />
-                  <strong>{candidate.time}</strong>
+                  <strong>{formatMs(candidate.timestamp_ms)}</strong>
                   <p>{candidate.reason}</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateThumbnailStatus(
+                        candidate,
+                        candidate.status === "selected" ? "pending" : "selected"
+                      )
+                    }
+                  >
+                    {candidate.status}
+                  </button>
                 </article>
               ))}
             </div>
+            <form className="direct-frame-form" onSubmit={createDirectFrameThumbnail}>
+              <input name="seconds" type="number" min="0" step="0.1" placeholder="12.0" />
+              <button type="submit" disabled={!createdProject}>
+                Frame Pick
+              </button>
+            </form>
           </div>
         </section>
 

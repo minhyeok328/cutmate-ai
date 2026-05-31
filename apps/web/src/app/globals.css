@@ -376,6 +376,11 @@ button:disabled {
   color: var(--muted);
 }
 
+.thumbnail-card button {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .timeline-item span {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -442,6 +447,20 @@ button:disabled {
   font-weight: 800;
 }
 
+.direct-frame-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.direct-frame-form input {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
 .segmented-control {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -487,7 +506,8 @@ button:disabled {
   .section-heading,
   .upload-actions,
   .timeline-item,
-  .subtitle-row {
+  .subtitle-row,
+  .direct-frame-form {
     align-items: stretch;
     flex-direction: column;
     grid-template-columns: 1fr;
