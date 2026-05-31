@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CutMate AI",
+  "version": "0.1.0",
+  "identifier": "com.minhyeok.cutmate-ai",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @cutmate/web dev",
+    "beforeBuildCommand": "pnpm --filter @cutmate/web build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../apps/web/out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CutMate AI",
+        "label": "main",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost http://localhost:3000 ws://localhost:3000 http://localhost:8000 http://127.0.0.1:8000",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "media-src": "'self' blob: data:",
+        "font-src": "'self' data:",
+        "style-src": "'unsafe-inline' 'self'",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "externalBin": ["binaries/cutmate-api"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

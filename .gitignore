@@ -9,6 +9,9 @@ node_modules/
 .uv-cache/
 .venv/
 .tmp/
+target/
+src-tauri/gen/
+src-tauri/binaries/cutmate-api-*
 
 # Frontend build/cache
 .next/
